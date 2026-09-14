@@ -139,16 +139,20 @@ function getCommandError(stdout: string, stderr: string): string {
   return stderr.trim() || stdout.trim() || "unknown error"
 }
 
-async function startHandoffInHerdr(options: {
-  pi: ExtensionAPI
-  ctx: ExtensionCommandContext
-  handoffPath: string
+function isInsideTmux(): boolean {
+  return Boolean(process.env["TMUX"]?.trim())
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`
+}
+
+async function createChildSession(options: {
+  cwd: string
   parentSession: string | undefined
-  sessionName: string
-  workspaceId: string
-}): Promise<void> {
+}): Promise<string> {
   const childSessionManager = SessionManager.create(
-    options.ctx.cwd,
+    options.cwd,
     undefined,
     options.parentSession
       ? { parentSession: options.parentSession }
@@ -162,6 +166,77 @@ async function startHandoffInHerdr(options: {
   await mkdir(childSessionManager.getSessionDir(), { recursive: true })
   await writeFile(childSessionPath, `${JSON.stringify(childSessionHeader)}\n`, {
     flag: "wx",
+  })
+  return childSessionPath
+}
+
+export function buildTmuxHandoffCommand(options: {
+  piBin: string
+  sessionPath: string
+  sessionName: string
+  provider: string
+  model: string
+  prompt: string
+}): string {
+  return [
+    options.piBin,
+    "--session",
+    shellQuote(options.sessionPath),
+    "--name",
+    shellQuote(options.sessionName),
+    "--provider",
+    shellQuote(options.provider),
+    "--model",
+    shellQuote(options.model),
+    shellQuote(options.prompt),
+  ].join(" ")
+}
+
+async function startHandoffInTmux(options: {
+  pi: ExtensionAPI
+  ctx: ExtensionCommandContext
+  handoffPath: string
+  parentSession: string | undefined
+  sessionName: string
+}): Promise<void> {
+  const childSessionPath = await createChildSession({
+    cwd: options.ctx.cwd,
+    parentSession: options.parentSession,
+  })
+  const model = options.ctx.model!
+
+  const command = buildTmuxHandoffCommand({
+    piBin: process.env["PI_HANDOFF_PI_BIN"]?.trim() || "pi",
+    sessionPath: childSessionPath,
+    sessionName: options.sessionName,
+    provider: model.provider,
+    model: model.id,
+    prompt: buildNewSessionPrompt(options.handoffPath),
+  })
+
+  const splitPane = await options.pi.exec(
+    "tmux",
+    ["split-window", "-d", "-h", "-c", options.ctx.cwd, command],
+    { timeout: 10_000 },
+  )
+  if (splitPane.code !== 0) {
+    throw new Error(
+      `Could not create tmux pane: ${getCommandError(splitPane.stdout, splitPane.stderr)}`,
+    )
+  }
+}
+
+async function startHandoffInHerdr(options: {
+  pi: ExtensionAPI
+  ctx: ExtensionCommandContext
+  handoffPath: string
+  parentSession: string | undefined
+  sessionName: string
+  workspaceId: string
+}): Promise<void> {
+  const childSessionPath = await createChildSession({
+    cwd: options.ctx.cwd,
+    parentSession: options.parentSession,
   })
 
   const createdTab = await options.pi.exec(
@@ -420,6 +495,18 @@ async function runHandoff(
       workspaceId: herdrWorkspaceId,
     })
     ctx.ui.notify(`Handoff opened in a new Herdr tab: ${handoffPath}`, "info")
+    return
+  }
+
+  if (isInsideTmux()) {
+    await startHandoffInTmux({
+      pi,
+      ctx,
+      handoffPath,
+      parentSession,
+      sessionName,
+    })
+    ctx.ui.notify(`Handoff opened in a new tmux pane: ${handoffPath}`, "info")
     return
   }
 

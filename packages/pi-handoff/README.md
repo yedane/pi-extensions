@@ -31,8 +31,9 @@ The marker is consumed before the prompt reaches the agent.
 - A handoff document is written under the OS temp directory.
 - A new session starts automatically from the document.
 - When Pi runs inside Herdr, the handoff opens in a new tab without changing focus. The current parent session stays available in its original tab.
+- Otherwise, when Pi runs inside tmux (`$TMUX` set), the handoff opens in a new split pane without changing focus. Set `PI_HANDOFF_PI_BIN` if `pi` is not on `PATH`.
 - The handoff session keeps the parent-session link and selected provider/model when available.
-- Outside Herdr, the current session is replaced.
+- Outside Herdr and tmux, the current session is replaced.
 
 A prompt containing only `-handoff` continues the current work.
 
